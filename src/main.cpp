@@ -8,6 +8,7 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
@@ -237,7 +238,43 @@ int main() {
 
           	vector<double> next_x_vals;
           	vector<double> next_y_vals;
+			
+			// try fitting spline to next waypoint
+			int wp = NextWaypoint(car_x, car_y, car_yaw,map_waypoints_x,map_waypoints_y);
 
+			double dist_inc = 0.005;
+
+			tk::spline s;
+			
+			int path_size = 0;
+
+			double pos_x;
+			double pos_y;
+			double angle;
+			if(path_size == 0){
+				pos_x = car_x;
+				pos_y = car_y;
+				angle = deg2rad(car_yaw);
+			}
+			else{
+				pos_x = previous_path_x[path_size-1];
+				pos_y = previous_path_y[path_size-1];
+
+			}
+			for (int i = previous_path_x.size()-25; i < previous_path_x.size(); i++){
+					next_x_vals.push_back(previous_path_x[i]);
+					next_y_vals.push_back(previous_path_y[i]);
+
+			}
+
+			for (int i = 0; i < 75-path_size; i++){
+				pos_x += (map_waypoints_x[wp]+6*map_waypoints_dx[wp]-pos_x)*(dist_inc*i);
+				pos_y += (map_waypoints_y[wp]+6*map_waypoints_dy[wp]-pos_y)*(dist_inc*i);
+
+				next_x_vals.push_back(pos_x);
+				next_y_vals.push_back(pos_y);
+
+			}
 
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
           	msgJson["next_x"] = next_x_vals;
