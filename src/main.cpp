@@ -233,9 +233,12 @@ int main() {
 	  hires_map_waypoints_s.push_back(cur_s);  
 	  cur_s += 1;
   }
+  
+  int lane = 1;
 
+  double ref_vel = 49.5; //mph
 
-  h.onMessage([&hires_map_waypoints_x,&hires_map_waypoints_y,&hires_map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy, &lane, &ref_vel](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -278,26 +281,32 @@ int main() {
           	vector<double> next_y_vals;
 			
 			// try fitting spline to next waypoint
-			int wp = NextWaypoint(car_x, car_y, car_yaw,hires_map_waypoints_x,hires_map_waypoints_y);
 
 			double dist_inc = 0.44;
-
-			tk::spline s;
 			
-			vector<double> spline_s;
-			vector<double> spline_d;
-
 			int path_size = previous_path_x.size();
 
 			int n_points = 50;
 
-			double pos_x;
-			double pos_y;
-			double angle;
-			if(path_size == 0){
-				pos_x = car_x;
-				pos_y = car_y;
-				angle = deg2rad(car_yaw);
+			vector<double> ptsx;
+			vector<double> ptsy;	
+
+			double pos_x = car_x;
+			double pos_y = car_y;
+			double ref_yaw = deg2rad(car_yaw);
+
+
+			if(path_size < 2){
+
+				// use two points that make path tangent to car
+				double prev_car_x = car_x - cos(car_yaw);
+				double prev_car_y = car_y - sin(car_yaw);
+
+				ptsx.push_back(prev_car_x);
+				ptsy.push_back(prev_car_y);
+
+				ptsx.push_back(car_x);
+				ptsy.push_back(car_y);
 			}
 			else{
 				pos_x = previous_path_x[path_size-1];
@@ -305,60 +314,81 @@ int main() {
 
 				double pos_x2 = previous_path_x[path_size-2];
 				double pos_y2 = previous_path_y[path_size-2];
-				angle = atan2(pos_y-pos_y2,pos_x-pos_x2);
-			}
-			for (int i = 0; i < path_size; i++){
-					next_x_vals.push_back(previous_path_x[i]);
-					next_y_vals.push_back(previous_path_y[i]);
+				ref_yaw = atan2(pos_y-pos_y2,pos_x-pos_x2);
 
+				ptsx.push_back(pos_x2);
+				ptsy.push_back(pos_y2);
+
+				ptsx.push_back(pos_x);
+				ptsy.push_back(pos_y);
 			}
-			auto pos_frenet = getFrenet(pos_x, pos_y, angle, hires_map_waypoints_x, hires_map_waypoints_y);
-			spline_s.push_back(pos_frenet[0]);
-			spline_d.push_back(pos_frenet[1]);
 
 			double middle_lane_d = getD(1);
 
-			for (int i =0; i < 100;i++){
+			vector<double> next_wp0 = getXY(car_s+30,(2+4*lane) , map_waypoints_s, map_waypoints_x, map_waypoints_y);
+			vector<double> next_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+			vector<double> next_wp2 = getXY(car_s+90, (2+4*lane),  map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
-				if (hires_map_waypoints_s[wp+i] > pos_frenet[0]){
-					spline_s.push_back(hires_map_waypoints_s[wp+i]);
-					spline_d.push_back(middle_lane_d);
-				}
-			}
+			ptsx.push_back(next_wp0[0]);
+			ptsx.push_back(next_wp1[0]);
+			ptsx.push_back(next_wp2[0]);
 
-			if (spline_s.size() <= 3){
+			ptsy.push_back(next_wp0[1]);
+			ptsy.push_back(next_wp1[1]);
+			ptsy.push_back(next_wp2[1]);
 
-				for (int i = 0; i < spline_s.size(); i++){
-					spline_s[i] -= hires_map_waypoints_s[hires_map_waypoints_s.size()-1];
-				}
-				for (int i = 0; i < 100 - spline_s.size();i++){
-					spline_s.push_back(hires_map_waypoints_s[i]);
-					spline_d.push_back(middle_lane_d);
-				}
-			}
-			s.set_points(spline_s,spline_d);
+			// shift to angle of 0 degrees
+			for (int i = 0; i < ptsx.size(); i++)
+			{
+				double shift_x = ptsx[i] - pos_x;
+				double shift_y = ptsy[i] - pos_y;
 
-			double pos_s = spline_s[0];
-			double pos_d = spline_d[0];	
-			for (int i = 0; i < n_points-path_size; i++){
-				//pos_x += (map_waypoints_x[wp]+6*map_waypoints_dx[wp]-pos_x)*(dist_inc*i);
-				//pos_y += (map_waypoints_y[wp1+6*map_waypoints_dy[wp]-pos_y)*(dist_inc*i);
-				pos_s += dist_inc;
-			    pos_d = s(pos_s);	
-				vector<double> next_xy;
-				if (pos_s < 0){
-					next_xy = getXY(pos_s+hires_map_waypoints_s[hires_map_waypoints_s.size()-1],pos_d,hires_map_waypoints_s,hires_map_waypoints_x, hires_map_waypoints_y);
-				}else{
-					next_xy = getXY(pos_s,pos_d,hires_map_waypoints_s,hires_map_waypoints_x,hires_map_waypoints_y); 
-				}
-				pos_x = next_xy[0];
-				pos_y = next_xy[1]; 
-
-				next_x_vals.push_back(pos_x);
-				next_y_vals.push_back(pos_y);
+				ptsx[i] = (shift_x * cos(0-ref_yaw)-shift_y*sin(0-ref_yaw));
+				ptsy[i] = (shift_x * sin(0-ref_yaw)+shift_y*cos(0-ref_yaw));
 
 			}
 
+			tk::spline s;
+
+			s.set_points(ptsx, ptsy);
+
+
+			for (int i = 0; i < previous_path_x.size(); i++){
+				next_x_vals.push_back(previous_path_x[i]);
+				next_y_vals.push_back(previous_path_y[i]);
+			}
+
+			// horizon values
+			double target_x = 30.;
+			double target_y = s(target_x);
+			double target_dist = sqrt((target_x)*(target_x)+(target_y)*(target_y));
+
+			double x_add_on = 0;
+
+			// output next n points with spline points so travel at reference velocity
+
+			for (int i = 0 ; i <= n_points-previous_path_x.size();i++){
+
+				double N = (target_dist/(0.02*ref_vel/2.24));
+				double x_point = x_add_on+(target_x)/N;
+				double y_point = s(x_point);
+
+				x_add_on = x_point;
+
+				double x_ref = x_point;
+				double y_ref = y_point;
+
+				// change back from vehicle reference angle
+				x_point = x_ref * cos(ref_yaw) - y_ref * sin(ref_yaw);
+				y_point = x_ref * sin(ref_yaw) + y_ref * cos(ref_yaw);
+
+				x_point += pos_x;
+				y_point += pos_y;
+
+
+				next_x_vals.push_back(x_point);
+				next_y_vals.push_back(y_point);
+			}
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
