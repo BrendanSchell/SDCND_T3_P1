@@ -236,7 +236,7 @@ int main() {
   
   int lane = 1;
 
-  double ref_vel = 49.5; //mph
+  double ref_vel = 0; //mph
 
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy, &lane, &ref_vel](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
@@ -280,14 +280,54 @@ int main() {
           	vector<double> next_x_vals;
           	vector<double> next_y_vals;
 			
-			// try fitting spline to next waypoint
 
-			double dist_inc = 0.44;
-			
 			int path_size = previous_path_x.size();
 
 			int n_points = 50;
 
+			if (path_size > 0)
+			{
+				car_s = end_path_s;
+			}
+
+			bool too_close = false;
+
+			//find ref_v to use
+			for (int i = 0; i < sensor_fusion.size();i++){
+				//car is in this lane
+				float d = sensor_fusion[i][6];
+				if (d < (2+4*lane+2) && d > (2+4*lane-2)){
+					
+					double vx = sensor_fusion[i][3];
+					double vy = sensor_fusion[i][4];
+					double check_speed = sqrt(vx*vx+vy*vy);
+					double check_car_s = sensor_fusion[i][5];
+
+					check_car_s += ((double) path_size*0.02*check_speed); //if using previous points can project s value out
+
+					//check s values greater than mine and s gap
+
+					if ((check_car_s > car_s) && ((check_car_s - car_s) < 30) ){
+
+						// lower velocity so we don't crash into car
+						//`ref_vel = 29.5;	
+						too_close = true;
+						if (lane > 0)
+						{
+							lane=0;
+						}
+					}
+				}
+
+			}
+
+			if (too_close){
+				ref_vel -= .224;
+			}
+			else if(ref_vel < 49.5)
+			{
+				ref_vel += .224;
+			}
 			vector<double> ptsx;
 			vector<double> ptsy;	
 
