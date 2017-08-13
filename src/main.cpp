@@ -160,12 +160,14 @@ vector<double> getXY(double s, double d, vector<double> maps_s, vector<double> m
 
 }
 
+// Function to get the Frenet d value corresponding to middle of lane
 double getD(int lane_id)
 {
 	return (lane_id)*4+2;
 }
 
-int getLaneId(int d)
+// Function to get the lane id for a given Frenet d value
+int getLaneId(double d)
 {
 	if (d >= 8 && d <= 12) 
 	{
@@ -178,6 +180,87 @@ int getLaneId(int d)
 	else{
 		return 0;
 	}
+}
+
+// Function to get the speed of a car given sensor fusion data
+double getCarSpeed(nlohmann::basic_json<>& sensor_fusion, int vehicle_pos){
+	double vx = sensor_fusion[vehicle_pos][3];
+	double vy = sensor_fusion[vehicle_pos][4];
+	double check_speed = sqrt(vx*vx+vy*vy);
+	return check_speed;
+}
+
+// Function to get the predicted s coordinate of the car
+double getFutureCarS(nlohmann::basic_json<>& sensor_fusion, int vehicle_pos, int path_size){
+	double check_speed = getCarSpeed(sensor_fusion, vehicle_pos);
+	double check_car_s = sensor_fusion[vehicle_pos][5];
+
+	check_car_s += ((double) path_size*0.02*check_speed); //if using previous points can project s value out
+
+	return check_car_s;
+}
+
+// Function to apply a cost function to the lanes and return a cost for each
+vector<double> getLaneCosts(nlohmann::basic_json<>& sensor_fusion, int cur_lane, int path_size, double ref_vel, double car_s){
+
+	// initialize to 0 costs
+	vector<double> costs = {0., 0., 0.};
+
+	// loop through all lanes
+	for (int i=0; i < 3;i++){
+		int num_v = 0;
+		double tot_speed = 0.;
+		double nearest_v = 1000.;
+
+		// cost for not being current lane
+		if (i != cur_lane){
+			costs[i] += 1;
+		}
+
+		// cost for being in one of the left lanes 
+		costs[i] += 2-i;
+
+		for (int j=0; j < sensor_fusion.size(); j++){
+
+			double vehicle_d = sensor_fusion[j][6];
+			
+			// in current lane
+			if (getLaneId(vehicle_d) == i){
+
+				// get s and speed of other car
+				double v_s = getFutureCarS(sensor_fusion, j,path_size);
+				double v_speed = getCarSpeed(sensor_fusion, j);
+				
+				
+				// difference between current and other car's s	value
+				double s_diff = v_s - car_s;
+
+				// if car is ahead, add to speed and vehicle totals
+				if (s_diff > 0){
+					tot_speed += v_speed;
+					num_v += 1;
+
+				}
+
+				// if car is ahead and the nearest car, set to nearest v
+				if (s_diff > 0 && s_diff < nearest_v){
+					nearest_v = s_diff;
+				}
+			}
+		}
+		if (num_v > 0){
+			
+			// cost for average lane speed
+			costs[i] += (ref_vel-(tot_speed / num_v));
+
+			// cost for nearest vehicle ahead
+			costs[i] += (1000. - nearest_v); 
+		}
+
+
+	}
+
+	return costs;
 }
 int main() {
   uWS::Hub h;
@@ -216,29 +299,16 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
-  tk::spline map_sx;
-  tk::spline map_sy;
-  map_sx.set_points(map_waypoints_s,map_waypoints_x);
-  map_sy.set_points(map_waypoints_s, map_waypoints_y);
-
-  vector<double> hires_map_waypoints_x;
-  vector<double> hires_map_waypoints_y;
-  vector<double> hires_map_waypoints_s;
-  
-  double cur_s = 0; 
-  while (cur_s < map_waypoints_s[map_waypoints_s.size()-1])
-  {
-	  hires_map_waypoints_x.push_back(map_sx(cur_s));
-	  hires_map_waypoints_y.push_back(map_sy(cur_s));
-	  hires_map_waypoints_s.push_back(cur_s);  
-	  cur_s += 1;
-  }
-  
+  // start in middle lane
   int lane = 1;
-
+  
+  // start with 0 velocity
   double ref_vel = 0; //mph
 
-  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy, &lane, &ref_vel](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
+  // count of iterations since lane switch
+  int cnt = 0;
+
+  h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy, &lane, &ref_vel, &cnt](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
     // The 4 signifies a websocket message
@@ -283,44 +353,101 @@ int main() {
 
 			int path_size = previous_path_x.size();
 
+			// points to predict out
 			int n_points = 50;
 
+			// set current car s to last point of previous path
 			if (path_size > 0)
 			{
 				car_s = end_path_s;
 			}
 
+			// increment counter since switch to avoid lane changing
+			// too often
+			cnt += 1;
+
+			// vars to keep track of behaviour
 			bool too_close = false;
+			bool safe_left = true;
+			bool safe_right = true;
+			bool desire_left = false;
+			bool desire_right = false;
+			bool desire_keep = false;
 
-			//find ref_v to use
+			// find lane costs
+			vector<double> lane_costs = getLaneCosts(sensor_fusion,lane,path_size,49.5,car_s);
+			
+
+			// determine minimum cost lane
+			int min_lane = 0;
+			double min_cost = lane_costs[0];
+			for (int i = 0; i < 3;i++){
+
+				if (lane_costs[i] < min_cost){
+					min_cost = lane_costs[i];
+					min_lane = i;
+				}
+				
+			}
+
+			// determine desired lane
+
+			if (min_lane == lane){
+				desire_keep = true;
+			}else if (min_lane > lane){
+				desire_right = true;
+			}else if (min_lane < lane){
+				desire_left = true;
+			}
+
 			for (int i = 0; i < sensor_fusion.size();i++){
-				//car is in this lane
+
+				// get sensor fusion car's data
 				float d = sensor_fusion[i][6];
-				if (d < (2+4*lane+2) && d > (2+4*lane-2)){
+				double check_car_speed = getCarSpeed(sensor_fusion, i);
+				double check_car_s = getFutureCarS(sensor_fusion, i , path_size);
+				
+				// difference between current and sensor fusion car's s values
+				double s_diff = check_car_s - car_s;
+				//car is in this lane
+				if (getLaneId(d) == lane){
 					
-					double vx = sensor_fusion[i][3];
-					double vy = sensor_fusion[i][4];
-					double check_speed = sqrt(vx*vx+vy*vy);
-					double check_car_s = sensor_fusion[i][5];
 
-					check_car_s += ((double) path_size*0.02*check_speed); //if using previous points can project s value out
-
-					//check s values greater than mine and s gap
-
-					if ((check_car_s > car_s) && ((check_car_s - car_s) < 30) ){
+					//check if too close to next vehicle in lane
+					if ((s_diff > 0) && (s_diff < 30) ){
 
 						// lower velocity so we don't crash into car
 						//`ref_vel = 29.5;	
 						too_close = true;
-						if (lane > 0)
-						{
-							lane=0;
+
+						if (s_diff < 20){
+							safe_left = false;
+							safe_right = false;
 						}
+					}	
+				} else if(getLaneId(d) == (lane-1)){
+					// check if safe to move to left lane
+					if (abs(s_diff) < 20){
+						safe_left = false;
+					}
+				} else if (getLaneId(d) == (lane+1)){
+					// check if safe to move to right lane
+					if (abs(s_diff) < 20){
+						safe_right = false;
 					}
 				}
-
+			}
+			// if desired and safe to pass, pass with preference to left
+			if (desire_left && safe_left && ref_vel > 30 && cnt > 10){
+				lane -= 1;
+				cnt = 0;
+			}
+			if (desire_right && safe_right && ref_vel > 30 && cnt > 10){
+				lane += 1;
+				cnt = 0;
 			}
 
+			// if too close to next vehicle in lane, slow down
 			if (too_close){
 				ref_vel -= .224;
 			}
@@ -335,10 +462,9 @@ int main() {
 			double pos_y = car_y;
 			double ref_yaw = deg2rad(car_yaw);
 
-
+			// prediction points using last few points of prev path 
 			if(path_size < 2){
 
-				// use two points that make path tangent to car
 				double prev_car_x = car_x - cos(car_yaw);
 				double prev_car_y = car_y - sin(car_yaw);
 
@@ -363,11 +489,11 @@ int main() {
 				ptsy.push_back(pos_y);
 			}
 
-			double middle_lane_d = getD(1);
+			// determine equally spaced points in future to fit spline to
 
-			vector<double> next_wp0 = getXY(car_s+30,(2+4*lane) , map_waypoints_s, map_waypoints_x, map_waypoints_y);
-			vector<double> next_wp1 = getXY(car_s+60, (2+4*lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
-			vector<double> next_wp2 = getXY(car_s+90, (2+4*lane),  map_waypoints_s, map_waypoints_x, map_waypoints_y);
+			vector<double> next_wp0 = getXY(car_s+30, getD(lane) , map_waypoints_s, map_waypoints_x, map_waypoints_y);
+			vector<double> next_wp1 = getXY(car_s+60, getD(lane), map_waypoints_s, map_waypoints_x, map_waypoints_y);
+			vector<double> next_wp2 = getXY(car_s+90, getD(lane),  map_waypoints_s, map_waypoints_x, map_waypoints_y);
 
 			ptsx.push_back(next_wp0[0]);
 			ptsx.push_back(next_wp1[0]);
@@ -377,7 +503,7 @@ int main() {
 			ptsy.push_back(next_wp1[1]);
 			ptsy.push_back(next_wp2[1]);
 
-			// shift to angle of 0 degrees
+			// shift to vehicle reference of 0 degrees
 			for (int i = 0; i < ptsx.size(); i++)
 			{
 				double shift_x = ptsx[i] - pos_x;
@@ -388,11 +514,12 @@ int main() {
 
 			}
 
+			// fit spline
 			tk::spline s;
 
 			s.set_points(ptsx, ptsy);
 
-
+			// push back previous path points
 			for (int i = 0; i < previous_path_x.size(); i++){
 				next_x_vals.push_back(previous_path_x[i]);
 				next_y_vals.push_back(previous_path_y[i]);

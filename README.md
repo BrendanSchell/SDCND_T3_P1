@@ -1,5 +1,70 @@
 # CarND-Path-Planning-Project
 Self-Driving Car Engineer Nanodegree Program
+
+## Reflection
+
+### Use of Frenet Coordinates
+
+The car in this project will exactly follow the x and y coordinates that are
+passed to it. Frenet coordinates are used throughout the path planner because
+they are easier to work with. The s and d coordinates are calculated using
+helper functions and then converted back to x and y coordinates after for use in the simulator.
+
+The car is able to stay within specific lanes using the d coordinate (width across
+the road). The s coordinate is used to be able to determine the distance along
+the road and is useful for determining distance between the ego vehicle and
+other vehicles.
+
+### Path Planning
+
+The vehicle looks through sensor fusion data of all vehicles on the right-hand
+side of the road and produces a cost for each lane based on the following:
+
+* Distance from right lane (right lane is desired)
+* Distance from current lane (changing lanes discouraged unless necessary)
+* Distance to nearest vehicle in lane (further vehicle reduces cost)
+* Average speed of vehicles ahead of current vehicle in lane (further from reference velocity is worse)
+
+Once the cost is calculated for each lane, the lane with the smallest cost
+is set to the desired lane. The lane is then assessed for other vehicles in
+close proximity to determine if it is safe. If it is safe, the vehicle will
+switch in the direction of the desired lane. In order to reduce jerk if 
+switching across two lanes, the vehicle waits at least 10 iterations before
+switching two lanes. In order to avoid the vehicle switching lanes without
+a safe velocity, lane changes are only performed above 30mph.
+
+Finite states of keep lane, perform lane changes, and prepare for lane changes
+are used in this path planner. They are simplified in that they do not involve 
+target velocities with acceleration / deceleration in this iteration. 
+
+### Path Smoothing
+
+In order to produce a smooth trajectory, points from the previous path that 
+have not yet been visited are included. Equally spaced points in the s horizon 
+are used to determine the trajectory. A spline is then fit to these future 
+points to smooth the trajectory. Points along this spline are chosen 
+that will be within safe acceleration limits and finally converted to x, y
+coordinates for use in the simulator.
+
+
+### Results
+
+The car is able to successfully navigate along the highway without colliding
+or exceeding jerk requirements. In testing, the path planner is able to run
+for more than 30 minutes without incidents. Though it performs well, the path planner
+is not always optimal and is often overcautious with changing lanes. There can of course
+be unanticipated simulator behaviour which results in near-misses.
+
+### Future Improvements
+
+The following can be done to improve the path planner further:
+
+* Following target velocities of different vehicles for reduced acceleration changes
+* Using polynomial fitting for jerk minimizing paths
+* Predicting other vehicles' intentions using a classification algorithm such as Naive Bayes
+* More precise definitions of finite states which might result in smoother and less overtly cautious lane changing.
+
+
    
 ### Simulator. You can download the Term3 Simulator BETA which contains the Path Planning Project from the [releases tab](https://github.com/udacity/self-driving-car-sim/releases).
 
@@ -8,7 +73,7 @@ In this project your goal is to safely navigate around a virtual highway with ot
 #### The map of the highway is in data/highway_map.txt
 Each waypoint in the list contains  [x,y,s,dx,dy] values. x and y are the waypoint's map coordinate position, the s value is the distance along the road to get to that waypoint in meters, the dx and dy values define the unit normal vector pointing outward of the highway loop.
 
-The highway's waypoints loop around so the frenet s value, distance along the road, goes from 0 to 6945.554.
+The highway's waypoints loop around so the frenet s value, distance along the road, goes  from 0 to 6945.554.
 
 ## Basic Build Instructions
 
